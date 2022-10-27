@@ -23,15 +23,26 @@ template < typename T >
 struct ValueCreator
 {
     template < typename Loader >
-    boost::optional< T >
+    std::variant< boost::optional< T >, std::string >
     operator( )( const char* resource, const char* schema, Loader&& loader )
     {
-        auto data = loader( resource, schema );
-        if ( !data )
-        {
-            return boost::none;
-        }
-        return T{data.data( )};
+        return std::visit(
+            []( auto&& data ) {
+                using U = std::decay_t< decltype( data ) >;
+                if constexpr ( std::is_same_v< U, std::string > )
+                {
+                    return data;
+                }
+                else if constexpr ( std::is_same_v< U, MemoryDescriptor > )
+                {
+                    if ( !data )
+                    {
+                        return boost::none;
+                    }
+                    return T{data.data( )};
+                }
+            },
+            loader( resource, schema ) );
     }
 };
 
@@ -39,15 +50,26 @@ template < typename T >
 struct ValueCreator< ArrayView< T > >
 {
     template < typename Loader >
-    boost::optional< ArrayView< T > >
+    std::variant< boost::optional< ArrayView< T > >, std::string >
     operator( )( const char* resource, const char* schema, Loader&& loader )
     {
-        auto data = loader( resource, schema );
-        if ( !data )
-        {
-            return boost::none;
-        }
-        return ArrayView< T >{data.data( ), data.data( ) + data.size_in_bytes( )};
+        return std::visit(
+            []( auto&& data ) {
+                using U = std::decay_t< decltype( data ) >;
+                if constexpr ( std::is_same_v< U, std::string > )
+                {
+                    return data;
+                }
+                else if constexpr ( std::is_same_v< U, MemoryDescriptor > )
+                {
+                    if ( !data )
+                    {
+                        return boost::none;
+                    }
+                    return ArrayView< T >{data.data( ), data.data( ) + data.size_in_bytes( )};
+                }
+            },
+            loader( resource, schema ) );
     }
 };
 
@@ -55,18 +77,55 @@ template < typename IndexType, typename... Args >
 struct ValueCreator< MultiArrayView< IndexType, Args... > >
 {
     template < typename Loader >
-    boost::optional< MultiArrayView< IndexType, Args... > >
+    std::variant< boost::optional< MultiArrayView< IndexType, Args... > >, std::string >
     operator( )( const char* resource, const char* schema, Loader&& loader )
     {
-        auto index = ValueCreator< ArrayView< IndexType > >( )(
-            ( std::string( resource ) + INDEX_SUFFIX ).c_str( ),
-            multivector_index_schema( schema ).c_str( ), loader );
-        auto data = loader( resource, schema );
-        if ( !index || !data )
-        {
-            return boost::none;
-        }
-        return MultiArrayView< IndexType, Args... >{*index, data.data( )};
+        auto index_name = std::string( resource ) + INDEX_SUFFIX;
+        auto index_result
+            = loader( index_name.c_str( ), multivector_index_schema( schema ).c_str( ) );
+        auto data_result = loader( resource, schema );
+
+        return std::visit(
+            [&]( auto&& index ) {
+                using U = std::decay_t< decltype( index ) >;
+                if constexpr ( std::is_same_v< U, std::string > )
+                {
+                    return index;
+                }
+                else if constexpr ( std::is_same_v< U, MemoryDescriptor > )
+                {
+                    return std::visit(
+                        [&]( auto&& data ) {
+                            using U = std::decay_t< decltype( data ) >;
+                            if constexpr ( std::is_same_v< U, std::string > )
+                            {
+                                return data;
+                            }
+                            else if constexpr ( std::is_same_v< U, MemoryDescriptor > )
+                            {
+                                if ( !index && !data )
+                                {
+                                    return boost::none;
+                                }
+                                if ( !index )
+                                {
+                                    return index_name + " missing, but " + resource + " exists";
+                                }
+                                if ( !data )
+                                {
+                                    return std::string( resource ) + " misssing, but " + index_name
+                                           + " exists";
+                                }
+                                ArrayView< IndexType > index_view{
+                                    index.data( ), index.data( ) + index.size_in_bytes( )};
+                                return MultiArrayView< IndexType, Args... >{index_view,
+                                                                            data.data( )};
+                            }
+                        },
+                        data_result );
+                }
+            },
+            index_result );
     }
 };
 
@@ -74,15 +133,26 @@ template <>
 struct ValueCreator< MemoryDescriptor >
 {
     template < typename Loader >
-    boost::optional< MemoryDescriptor >
+    std::variant< boost::optional< MemoryDescriptor >, std::string >
     operator( )( const char* resource, const char* schema, Loader&& loader )
     {
-        auto data = loader( resource, schema );
-        if ( !data )
-        {
-            return boost::none;
-        }
-        return data;
+        return std::visit(
+            []( auto&& data ) {
+                using U = std::decay_t< decltype( data ) >;
+                if constexpr ( std::is_same_v< U, std::string > )
+                {
+                    return data;
+                }
+                else if constexpr ( std::is_same_v< U, MemoryDescriptor > )
+                {
+                    if ( !data )
+                    {
+                        return boost::none;
+                    }
+                    return data;
+                }
+            },
+            loader( resource, schema ) );
     }
 };
 
@@ -101,9 +171,25 @@ public:
     MemoryDescriptor
     operator( )( ) const
     {
-        boost::optional< MemoryDescriptor > data = m_storage->read< MemoryDescriptor >(
-            m_resource_name.c_str( ), m_resource_schema.c_str( ) );
-        return data ? *data : MemoryDescriptor( );
+        auto data_result = m_storage->read< MemoryDescriptor >( m_resource_name.c_str( ),
+                                                                m_resource_schema.c_str( ) );
+        return std::visit(
+            []( auto&& data ) {
+                using U = std::decay_t< decltype( data ) >;
+                if constexpr ( std::is_same_v< U, std::string > )
+                {
+                    return MemoryDescriptor( );
+                }
+                else if constexpr ( std::is_same_v< U, boost::optional< MemoryDescriptor > > )
+                {
+                    if ( !data )
+                    {
+                        return MemoryDescriptor( );
+                    }
+                    return *data;
+                }
+            },
+            data_result );
     }
 
 private:
@@ -114,7 +200,7 @@ private:
 }  // namespace internal
 
 template < typename T >
-boost::optional< T >
+std::variant< boost::optional< T >, std::string >
 ResourceStorage::read( const char* resource_name, const char* schema )
 {
     auto loader = [this]( const char* name, const char* schema ) {
@@ -139,27 +225,38 @@ ResourceStorage::write_schema( const char* resource_name, const char* schema )
     return static_cast< bool >( *schema_stream );
 }
 
-inline MemoryDescriptor
+inline std::variant< MemoryDescriptor, std::string >
 ResourceStorage::read_and_check_schema( const char* resource_name, const char* expected_schema )
 {
     auto data = read_resource( resource_name );
     auto schema = read_resource( ( std::string( resource_name ) + ".schema" ).c_str( ) );
 
-    if ( !data || !schema )
+    if ( !data && !schema )
     {
+        // missing resource, might not be an error in case of optional data
         return MemoryDescriptor( );
+    }
+
+    if ( !data )
+    {
+        return std::string( resource_name ) + " missing, but .schema exists";
+    }
+
+    if ( !schema )
+    {
+        return std::string( resource_name ) + ".schema missing, but data exists";
     }
 
     if ( sizeof( resource_storage::size_type ) + PADDING_SIZE > data.size_in_bytes( ) )
     {
-        return MemoryDescriptor( );
+        return std::string( resource_name ) + "'s header metadata missing";
     }
 
     Reader< resource_storage::size_type > size_reader{data.data( )};
     auto size = size_reader;
     if ( size + sizeof( resource_storage::size_type ) + PADDING_SIZE != data.size_in_bytes( ) )
     {
-        return MemoryDescriptor( );
+        return std::string( resource_name ) + "'s size does not match metadata";
     }
 
     std::string stored_schema( reinterpret_cast< const char* >( schema.data( ) ),
@@ -167,7 +264,8 @@ ResourceStorage::read_and_check_schema( const char* resource_name, const char* e
 
     if ( stored_schema != expected_schema )
     {
-        return MemoryDescriptor( );
+        auto diff = compute_diff( expected_schema, stored_schema.c_str( ) );
+        return std::string( resource_name ) + "'s schema is not matching expectations:\n" + diff;
     }
 
     return MemoryDescriptor{data.data( ) + sizeof( resource_storage::size_type ), size};

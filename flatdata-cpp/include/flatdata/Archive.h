@@ -39,14 +39,22 @@ public:
     explicit operator bool( ) const;
 
     /**
-     * @brief Returns true if archive is correctly loaded
+     * @brief Returns true if archive is correctly loaded. This indicates that either the archive is
+     * empty (see is_empty), some mandatory resources are missing, or that some resource is
+     * corrupted
      */
     bool is_open( ) const;
 
     /**
+     * @brief Returns whether the archive is missing completely. This can happen only if the whole
+     * folder is missing, or the archive's schema
+     */
+    bool is_empty( ) const;
+
+    /**
      * @brief Returns text description of the archive and its resources' state.
      */
-    std::string describe( size_t nest_level = 0u ) const;
+    std::string describe( bool skip_resources_on_error = true, size_t nest_level = 0u ) const;
 
     /**
      * @brief Returns archive name. Is implemented by the concrete archive instances.
@@ -128,8 +136,9 @@ private:
 
 private:
     std::shared_ptr< flatdata::ResourceStorage > m_storage;
-    flatdata::MemoryDescriptor m_signature;
     bool m_is_open = false;
+    bool m_is_empty = true;
+    std::string m_errors;
 };
 
 // -------------------------------------------------------------------------------------------------

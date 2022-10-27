@@ -17,6 +17,7 @@
 
 #include <fstream>
 #include <memory>
+#include <variant>
 
 namespace flatdata
 {
@@ -38,10 +39,12 @@ public:
      * @brief Read resource.
      * @param key resource key.
      * @param schema expected resource schema.
-     * @return resource or empty object in case resource schema doesn't match one provided.
+     * @return resource or empty object in case resource is missing. A std::string in case of an
+     * error
      */
     template < typename T >
-    boost::optional< T > read( const char* resource_name, const char* schema );
+    std::variant< boost::optional< T >, std::string > read( const char* resource_name,
+                                                            const char* schema );
 
     /**
      * @brief Write resource.
@@ -117,8 +120,10 @@ private:
 
     bool write_schema( const char* resource_name, const char* schema );
 
-    MemoryDescriptor read_and_check_schema( const char* resource_name,
-                                            const char* expected_schema );
+    std::variant< MemoryDescriptor, std::string > read_and_check_schema(
+        const char* resource_name, const char* expected_schema );
+
+    std::string compute_diff( const char* expected, const char* found );
 };
 
 }  // namespace flatdata
